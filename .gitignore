@@ -1,0 +1,8 @@
+# OpenCode / Sisyphus
+.sisyphus/
+
+# Prevent Git Bash redirects from creating this file
+nul
+
+# Python virtualenvs
+.venv/
