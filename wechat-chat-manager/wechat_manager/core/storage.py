@@ -69,6 +69,25 @@ class EncryptedStorage:
                     FOREIGN KEY (contact_id) REFERENCES contacts(id)
                 )
             """)
+            # Deduplicate existing rows by contact_id + original_id
+            cursor.execute(
+                """
+                DELETE FROM messages
+                WHERE original_id IS NOT NULL
+                  AND id NOT IN (
+                      SELECT MIN(id)
+                      FROM messages
+                      WHERE original_id IS NOT NULL
+                      GROUP BY contact_id, original_id
+                  )
+                """
+            )
+            cursor.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_contact_original
+                ON messages(contact_id, original_id)
+                """
+            )
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_messages_contact ON messages(contact_id)
             """)
@@ -78,6 +97,22 @@ class EncryptedStorage:
             conn.commit()
         finally:
             conn.close()
+
+    @staticmethod
+    def _is_msgsource_xml(text: str) -> bool:
+        lower = (text or "").lstrip().lower()
+        return lower.startswith("<") and ("<msgsource" in lower or "<alnode" in lower)
+
+    def _should_replace_content(self, old_content: str, new_content: str) -> bool:
+        if not new_content:
+            return False
+        if old_content == new_content:
+            return False
+        if self._is_msgsource_xml(old_content):
+            return True
+        if old_content in ("[不支持的消息]", "[文本消息]"):
+            return True
+        return False
 
     def _get_connection(self) -> sqlite3.Connection:
         return sqlite3.connect(str(self.db_path))
@@ -115,21 +150,51 @@ class EncryptedStorage:
             cursor = conn.cursor()
             count = 0
             for msg in messages:
+                new_content = msg.content or ""
+                if msg.original_id is not None:
+                    row = cursor.execute(
+                        """
+                        SELECT id, content FROM messages
+                        WHERE contact_id = ? AND original_id = ?
+                        """,
+                        (contact_id, msg.original_id),
+                    ).fetchone()
+                    if row is not None:
+                        old_id, old_content = row[0], row[1] or ""
+                        if self._should_replace_content(old_content, new_content):
+                            cursor.execute(
+                                """
+                                UPDATE messages
+                                SET content = ?, create_time = ?, is_sender = ?, msg_type = ?
+                                WHERE id = ?
+                                """,
+                                (
+                                    new_content,
+                                    msg.create_time,
+                                    1 if msg.is_sender else 0,
+                                    msg.msg_type,
+                                    old_id,
+                                ),
+                            )
+                            count += cursor.rowcount
+                        continue
+
                 cursor.execute(
                     """
-                    INSERT INTO messages (contact_id, original_id, content, create_time, is_sender, msg_type)
+                    INSERT OR IGNORE INTO messages
+                    (contact_id, original_id, content, create_time, is_sender, msg_type)
                     VALUES (?, ?, ?, ?, ?, ?)
-                """,
+                    """,
                     (
                         contact_id,
                         msg.original_id,
-                        msg.content,
+                        new_content,
                         msg.create_time,
                         1 if msg.is_sender else 0,
                         msg.msg_type,
                     ),
                 )
-                count += 1
+                count += cursor.rowcount
             conn.commit()
             return count
         except sqlite3.Error:
@@ -216,6 +281,19 @@ class EncryptedStorage:
         finally:
             conn.close()
 
+    def get_latest_message_time(self, contact_id: str) -> int:
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT MAX(create_time) FROM messages WHERE contact_id = ?",
+                (contact_id,),
+            )
+            row = cursor.fetchone()
+            return int(row[0] or 0)
+        finally:
+            conn.close()
+
     def delete_contact(self, contact_id: str) -> bool:
         conn = self._get_connection()
         try:
@@ -224,6 +302,21 @@ class EncryptedStorage:
             cursor.execute("DELETE FROM contacts WHERE id = ?", (contact_id,))
             conn.commit()
             return cursor.rowcount > 0 or True
+        except sqlite3.Error:
+            return False
+        finally:
+            conn.close()
+
+    def delete_message(self, contact_id: str, message_id: int) -> bool:
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "DELETE FROM messages WHERE id = ? AND contact_id = ?",
+                (message_id, contact_id),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
         except sqlite3.Error:
             return False
         finally:

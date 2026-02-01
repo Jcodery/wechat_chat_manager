@@ -122,6 +122,44 @@ class ModeA:
             results.append(result)
         return results
 
+    def sync_contact(self, contact_id: str) -> dict:
+        """Incrementally extract new messages for a contact.
+
+        Returns:
+            dict with keys: contact_id, new_messages, success, error(optional)
+        """
+        try:
+            if not self.is_contact_extracted(contact_id):
+                result = self.extract_contact(contact_id)
+                return {
+                    "contact_id": contact_id,
+                    "new_messages": result.get("message_count", 0),
+                    "success": result.get("success", False),
+                    "error": result.get("error"),
+                }
+
+            last_time = self.storage.get_latest_message_time(contact_id)
+            messages = self.db_handler.get_messages(
+                contact_id, limit=10000, since_time=last_time
+            )
+
+            for msg in messages:
+                msg.original_id = msg.id
+
+            stored_count = self.storage.store_messages(contact_id, messages)
+            return {
+                "contact_id": contact_id,
+                "new_messages": stored_count,
+                "success": True,
+            }
+        except Exception as e:
+            return {
+                "contact_id": contact_id,
+                "new_messages": 0,
+                "success": False,
+                "error": str(e),
+            }
+
     def get_extracted_contacts(self) -> List[Contact]:
         """List all contacts that have been extracted.
 

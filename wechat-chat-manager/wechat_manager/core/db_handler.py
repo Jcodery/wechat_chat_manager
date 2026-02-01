@@ -9,6 +9,7 @@ import os
 import re
 import sqlite3
 import hashlib
+import importlib
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -206,6 +207,112 @@ class WeChatDBHandler:
         return str(v)
 
     @staticmethod
+    def _looks_garbled(text: str) -> bool:
+        if not text:
+            return True
+        bad = 0
+        for ch in text:
+            code = ord(ch)
+            if code < 32 and ch not in ("\n", "\r", "\t"):
+                bad += 1
+            if ch == "\ufffd":
+                bad += 3
+        return bad > max(3, len(text) // 5)
+
+    def _sanitize_content(
+        self, msg_type: int, content: object, source: object | None = None
+    ) -> str:
+        text = self._to_text(content)
+        if msg_type == 3:
+            return "[图片]"
+        if msg_type in (43,):
+            return "[视频]"
+        if msg_type in (34,):
+            return "[语音]"
+        if msg_type in (47,):
+            return "[表情]"
+        if msg_type in (49,):
+            return "[文件]"
+        if msg_type == 10000:
+            return text or "[系统消息]"
+
+        if msg_type == 1:
+            if text and not text.isdigit() and not self._looks_garbled(text):
+                return text
+
+            alt = self._try_decode_source(source)
+            if alt:
+                return alt
+
+            # Avoid showing msgsource XML as content
+            if self._is_msgsource_xml(text):
+                return ""
+
+            if text and not self._looks_garbled(text):
+                return text
+            if self._looks_garbled(text):
+                return "[不支持的消息]"
+
+        if self._looks_garbled(text):
+            return "[不支持的消息]"
+        return text
+
+    @staticmethod
+    def _try_decode_source(source: object | None) -> str:
+        if source is None:
+            return ""
+        if isinstance(source, str):
+            text = source.strip()
+            if not text:
+                return ""
+            lower = text.lstrip().lower()
+            if lower.startswith("<") and ("<msgsource" in lower or "<alnode" in lower):
+                return ""
+            return text
+        if not isinstance(source, (bytes, bytearray, memoryview)):
+            return ""
+
+        blob = bytes(source)
+        if len(blob) < 4:
+            return ""
+
+        # Zstandard magic number: 0x28B52FFD
+        if blob[:4] != b"\x28\xb5\x2f\xfd":
+            return ""
+
+        try:
+            zstd = importlib.import_module("zstandard")
+        except Exception:
+            return ""
+
+        try:
+            dctx = zstd.ZstdDecompressor()
+            raw = dctx.decompress(blob, max_output_size=2 * 1024 * 1024)
+        except Exception:
+            return ""
+
+        try:
+            text = raw.decode("utf-8", errors="ignore")
+        except Exception:
+            return ""
+
+        text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", text).strip()
+        if not text:
+            return ""
+
+        # Ignore metadata-only XML blocks (e.g. <msgsource>...)
+        lower = text.lstrip().lower()
+        if lower.startswith("<") and ("<msgsource" in lower or "<alnode" in lower):
+            return ""
+
+        return text
+
+    @staticmethod
+    def _is_msgsource_xml(text: str) -> bool:
+        lower = (text or "").lstrip().lower()
+        return lower.startswith("<") and ("<msgsource" in lower or "<alnode" in lower)
+
+    @staticmethod
     def _find_table(conn: sqlite3.Connection, candidates: List[str]) -> Optional[str]:
         try:
             rows = conn.execute(
@@ -385,7 +492,9 @@ class WeChatDBHandler:
         finally:
             conn.close()
 
-    def get_messages(self, contact_id: str, limit: int = 100) -> List[Message]:
+    def get_messages(
+        self, contact_id: str, limit: int = 100, since_time: Optional[int] = None
+    ) -> List[Message]:
         """读取指定联系人的消息
 
         从所有 MSGn.db 文件中读取指定联系人的消息
@@ -401,7 +510,9 @@ class WeChatDBHandler:
         msg_databases = self.get_all_msg_databases()
 
         for db_path in msg_databases:
-            messages = self._get_messages_from_db(db_path, contact_id, limit)
+            messages = self._get_messages_from_db(
+                db_path, contact_id, limit, since_time=since_time
+            )
             all_messages.extend(messages)
 
             # 如果已经达到限制，提前退出
@@ -413,7 +524,11 @@ class WeChatDBHandler:
         return all_messages[:limit]
 
     def _get_messages_from_db(
-        self, db_path: str, contact_id: str, limit: int
+        self,
+        db_path: str,
+        contact_id: str,
+        limit: int,
+        since_time: Optional[int] = None,
     ) -> List[Message]:
         """从单个数据库文件读取消息
 
@@ -449,6 +564,7 @@ class WeChatDBHandler:
                 col_real_sender = _pick("real_sender_id", "realsenderid", "sender_id")
                 col_content = _pick("message_content", "strcontent", "content")
                 col_compress = _pick("compress_content", "compresscontent")
+                col_source = _pick("source")
                 col_sort = _pick("sort_seq", "sortseq")
 
                 if not (col_local_id and col_type and col_create and col_content):
@@ -492,13 +608,20 @@ class WeChatDBHandler:
                     col_real_sender or "NULL",
                     col_content,
                     col_compress or "NULL",
+                    col_source or "NULL",
                 ]
-                sql = (
-                    f"SELECT {', '.join(select_cols)} FROM {v4_table} "
-                    f"ORDER BY {order_col} DESC LIMIT ?"
-                )
+                v4_params: list[int] = []
+                where_clause = ""
+                if since_time:
+                    where_clause = f" WHERE {col_create} >= ?"
+                    v4_params.append(int(since_time))
 
-                cursor = conn.execute(sql, (int(limit),))
+                sql = (
+                    f"SELECT {', '.join(select_cols)} FROM {v4_table}"
+                    f"{where_clause} ORDER BY {order_col} DESC LIMIT ?"
+                )
+                v4_params.append(int(limit))
+                cursor = conn.execute(sql, tuple(v4_params))
                 messages: List[Message] = []
                 for row in cursor.fetchall():
                     local_id = row[0]
@@ -509,6 +632,7 @@ class WeChatDBHandler:
                     content = self._to_text(row[5])
                     if not content:
                         content = self._to_text(row[6])
+                    content = self._sanitize_content(msg_type, content, row[7])
 
                     is_sender = False
                     if sender_flag is not None:
@@ -519,16 +643,17 @@ class WeChatDBHandler:
                         except Exception:
                             is_sender = False
 
-                    messages.append(
-                        Message(
-                            id=local_id,
-                            contact_id=contact_id,
-                            content=content,
-                            create_time=create_time,
-                            is_sender=is_sender,
-                            msg_type=msg_type,
+                    if content:
+                        messages.append(
+                            Message(
+                                id=local_id,
+                                contact_id=contact_id,
+                                content=content,
+                                create_time=create_time,
+                                is_sender=is_sender,
+                                msg_type=msg_type,
+                            )
                         )
-                    )
 
                 return messages
 
@@ -553,7 +678,7 @@ class WeChatDBHandler:
             col_talkerid = col_map.get("talkerid")
             col_talker = col_map.get("talker")
 
-            params: list[int | str] = []
+            v3_params: list[int | str] = []
             where_clause = ""
             if col_talkerid:
                 name2id_table = self._find_table(
@@ -580,35 +705,41 @@ class WeChatDBHandler:
                     return []
 
                 where_clause = f"WHERE {col_talkerid} = ?"
-                params = [talker_id]
+                v3_params = [talker_id]
             elif col_talker:
                 where_clause = f"WHERE {col_talker} = ?"
-                params = [contact_id]
+                v3_params = [contact_id]
             else:
                 return []
 
             # Only text messages (Type=1) when available
             where_clause += f" AND {col_type} = 1"
 
+            if since_time:
+                where_clause += f" AND {col_create} >= ?"
+                v3_params.append(int(since_time))
+
             sql = (
                 f"SELECT {col_local_id}, {col_type}, {col_create}, {col_sender}, {col_content} "
                 f"FROM {msg_table} {where_clause} "
                 f"ORDER BY {col_create} DESC LIMIT ?"
             )
-            params.append(int(limit))
-            cursor = conn.execute(sql, tuple(params))
+            v3_params.append(int(limit))
+            cursor = conn.execute(sql, tuple(v3_params))
 
             messages = []
             for row in cursor.fetchall():
-                message = Message(
-                    id=row[0],
-                    contact_id=contact_id,
-                    content=row[4] or "",
-                    create_time=row[2],
-                    is_sender=bool(row[3]),
-                    msg_type=row[1],
-                )
-                messages.append(message)
+                content = self._sanitize_content(int(row[1] or 0), row[4] or "", None)
+                if content:
+                    message = Message(
+                        id=row[0],
+                        contact_id=contact_id,
+                        content=content,
+                        create_time=row[2],
+                        is_sender=bool(row[3]),
+                        msg_type=row[1],
+                    )
+                    messages.append(message)
 
             return messages
         finally:

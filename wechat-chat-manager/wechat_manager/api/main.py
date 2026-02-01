@@ -51,20 +51,11 @@ async def health():
 
 
 # Include routers
-from wechat_manager.api.routes import (
-    auth,
-    wechat,
-    contacts,
-    mode_a,
-    mode_b,
-    search,
-    export,
-)
+from wechat_manager.api.routes import auth, wechat, contacts, mode_a, search, export
 
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(wechat.router, prefix="/api/wechat", tags=["wechat"])
 app.include_router(contacts.router, prefix="/api/contacts", tags=["contacts"])
 app.include_router(mode_a.router, prefix="/api/mode-a", tags=["mode-a"])
-app.include_router(mode_b.router, prefix="/api/mode-b", tags=["mode-b"])
 app.include_router(search.router, prefix="/api/search", tags=["search"])
 app.include_router(export.router, prefix="/api/export", tags=["export"])

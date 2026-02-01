@@ -18,11 +18,6 @@ document.addEventListener('alpine:init', () => {
         selectedIds: [], 
         currentContact: null,
         
-        // Mode
-        mode: 'safe', // 'safe' or 'convenient'
-        showRiskWarning: false,
-        pendingMode: null,
-        
         // UI state
         loading: false,
         error: null,
@@ -31,6 +26,15 @@ document.addEventListener('alpine:init', () => {
         showToast: false,
         toastMessage: '',
         toastType: 'info', // 'info', 'success', 'error', 'warning'
+
+        messageMenu: {
+            visible: false,
+            x: 0,
+            y: 0,
+            message: null,
+        },
+        messagePoller: null,
+        messageSyncing: false,
         
         // WeChat config
         wechatDir: '',
@@ -430,11 +434,15 @@ document.addEventListener('alpine:init', () => {
             if (!contact) return;
             
             this.currentContact = contact;
+            this.closeMessageMenu();
             this.loading = true;
             try {
                 const res = await fetch(`${this.apiBase}/mode-a/messages/${contactId}`);
                 if (!res.ok) throw new Error('加载消息失败');
-                this.messages = await res.json();
+                const data = await res.json();
+                const list = (data && data.messages) ? data.messages : [];
+                this.messages = list.map(m => this.formatMessage(m, contact));
+                this.startMessagePolling(contactId);
             } catch (e) {
                 this.error = '加载消息失败';
                 this.showNotification('加载消息失败', 'error');
@@ -462,7 +470,10 @@ document.addEventListener('alpine:init', () => {
                 }
                 const data = await res.json();
                 this.showNotification(`成功提取 ${data.total_extracted || 0} 条消息`, 'success');
-                await this.loadContacts(); // Refresh to show updated status if needed
+                await this.loadContacts();
+                if (this.selectedIds.length === 1) {
+                    await this.loadMessages(this.selectedIds[0]);
+                }
             } catch (e) {
                 this.error = '提取失败: ' + e.message;
                 this.showNotification(e.message || '提取失败', 'error');
@@ -471,61 +482,23 @@ document.addEventListener('alpine:init', () => {
             }
         },
         
-        // Mode B methods
-        async hideChats() {
-            // Check preflight first
+        async deleteMessage(msg) {
+            if (!msg || !msg.id || !this.currentContact) return;
             try {
-                const preflightRes = await fetch(`${this.apiBase}/mode-b/preflight`);
-                const preflight = await preflightRes.json();
-                if (!preflight.all_passed) {
-                    const failedChecks = Object.entries(preflight.checks)
-                        .filter(([k,v]) => !v).map(([k]) => k).join(', ');
-                    this.showNotification('预检查失败: ' + failedChecks, 'error');
-                    return;
+                const res = await fetch(
+                    `${this.apiBase}/mode-a/messages/${this.currentContact.id}/${msg.id}`,
+                    { method: 'DELETE' }
+                );
+                if (!res.ok) {
+                    const err = await this.readApiError(res, '删除失败');
+                    throw new Error(err);
                 }
-                
-                // Proceed with hide (Not explicitly bound to a button in the provided HTML, but implementing for completeness)
-                // Assuming there's an endpoint for hiding
-                /* 
-                const res = await fetch(`${this.apiBase}/mode-b/hide`, {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({contact_ids: [...this.selectedIds]})
-                });
-                // ... handle response
-                */
+                this.messages = this.messages.filter(m => m.id !== msg.id);
+                this.showNotification('消息已删除', 'success');
             } catch (e) {
-                this.showNotification('操作失败: ' + e.message, 'error');
-            }
-        },
-        
-        async restoreChats() {
-            if (this.selectedIds.length === 0) {
-                this.showNotification('请先选择联系人', 'error');
-                return;
-            }
-            this.loading = true;
-            try {
-                let restoredTotal = 0;
-                for (const id of this.selectedIds) {
-                    const res = await fetch(`${this.apiBase}/mode-b/restore`, {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({contact_id: id})
-                    });
-                    if (!res.ok) {
-                        const msg = await this.readApiError(res, '还原失败');
-                        throw new Error(msg);
-                    }
-                    const data = await res.json().catch(() => ({}));
-                    restoredTotal += Number(data.restored || 0);
-                }
-                this.showNotification(`聊天记录还原成功（共 ${restoredTotal} 条）`, 'success');
-                await this.loadContacts();
-            } catch (e) {
-                this.showNotification('还原失败: ' + (e.message || ''), 'error');
+                this.showNotification(e.message || '删除失败', 'error');
             } finally {
-                this.loading = false;
+                this.closeMessageMenu();
             }
         },
         
@@ -593,6 +566,7 @@ document.addEventListener('alpine:init', () => {
             } else {
                 this.messages = [];
                 this.currentContact = null;
+                this.stopMessagePolling();
             }
         },
         
@@ -604,32 +578,118 @@ document.addEventListener('alpine:init', () => {
             this.selectedIds = [];
             this.messages = [];
             this.currentContact = null;
+            this.stopMessagePolling();
         },
         
-        async switchMode(newMode) {
-            if (newMode === this.mode) return;
-            
-            if (newMode === 'convenient') {
-                this.pendingMode = newMode;
-                this.showRiskWarning = true;
-            } else {
-                this.mode = newMode;
-                this.showNotification('已切换至安全模式', 'info');
+        openMessageMenu(msg, event) {
+            this.messageMenu = {
+                visible: true,
+                x: event.clientX,
+                y: event.clientY,
+                message: msg,
+            };
+        },
+
+        closeMessageMenu() {
+            this.messageMenu.visible = false;
+            this.messageMenu.message = null;
+        },
+
+        startMessagePolling(contactId) {
+            this.stopMessagePolling();
+            this.messagePoller = setInterval(() => {
+                this.syncMessages(contactId);
+            }, 4000);
+        },
+
+        stopMessagePolling() {
+            if (this.messagePoller) {
+                clearInterval(this.messagePoller);
+                this.messagePoller = null;
             }
         },
-        
-        confirmModeB() {
-            this.mode = 'convenient';
-            this.showRiskWarning = false;
-            this.showNotification('已切换至便捷模式', 'warning');
-            // Potentially trigger preflight check here
-            this.hideChats(); // Check preflight when entering mode B? Or just when performing action?
-            // For now, just switch UI mode.
+
+        async syncMessages(contactId) {
+            if (this.messageSyncing) return;
+            if (!this.currentContact || this.currentContact.id !== contactId) return;
+            this.messageSyncing = true;
+            try {
+                const res = await fetch(`${this.apiBase}/mode-a/sync/${contactId}`, { method: 'POST' });
+                if (!res.ok) {
+                    this.messageSyncing = false;
+                    return;
+                }
+                const data = await res.json();
+                if (data && data.new_messages > 0) {
+                    await this.loadMessages(contactId);
+                }
+            } catch (e) {
+                // silent sync failures
+            } finally {
+                this.messageSyncing = false;
+            }
         },
-        
-        cancelModeB() {
-            this.showRiskWarning = false;
-            this.pendingMode = null;
+
+        formatTime(ts) {
+            if (!ts) return '';
+            const d = new Date(ts * 1000);
+            return d.toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+        },
+
+        getContactLabel(contact) {
+            if (!contact) return '';
+            return contact.remark || contact.nickname || contact.alias || contact.username || contact.id || '';
+        },
+
+        classifyMessage(content, msgType) {
+            const text = (content || '').toString();
+            const trimmed = text.trim();
+
+            if (msgType === 3) {
+                const imageUrl = trimmed.match(/https?:\/\/\S+\.(png|jpe?g|gif|webp)/i);
+                if (imageUrl) {
+                    return { type: 'image', imageSrc: imageUrl[0], text };
+                }
+                return { type: 'text', text: '[图片]' };
+            }
+            if (msgType === 49) {
+                return { type: 'file', fileName: trimmed || '文件', text };
+            }
+            if (msgType === 47) {
+                return { type: 'text', text: '[表情]' };
+            }
+            if (msgType === 34) {
+                return { type: 'text', text: '[语音]' };
+            }
+            if (msgType === 43) {
+                return { type: 'text', text: '[视频]' };
+            }
+
+            const imageUrl = trimmed.match(/https?:\/\/\S+\.(png|jpe?g|gif|webp)/i);
+            if (imageUrl) {
+                return { type: 'image', imageSrc: imageUrl[0], text };
+            }
+
+            const fileMatch = trimmed.match(/([^\s\\/]+\.(pdf|docx?|xlsx?|pptx?|zip|rar|7z|txt))/i);
+            if (fileMatch) {
+                return { type: 'file', fileName: fileMatch[1], text };
+            }
+
+            return { type: 'text', text };
+        },
+
+        formatMessage(msg, contact) {
+            const meta = this.classifyMessage(msg.content || '', msg.msg_type);
+            return {
+                ...msg,
+                isSelf: !!msg.is_sender,
+                time: this.formatTime(msg.create_time),
+                senderLabel: msg.is_sender ? '我' : this.getContactLabel(contact),
+                displayType: meta.type,
+                displayText: meta.text,
+                fileName: meta.fileName,
+                imageSrc: meta.imageSrc,
+            };
         },
         
         // Getters

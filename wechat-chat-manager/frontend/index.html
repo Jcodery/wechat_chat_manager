@@ -98,18 +98,6 @@
 
                     <!-- Right Actions -->
                     <div class="flex items-center ml-4 space-x-4">
-                        <!-- Mode Toggle -->
-                        <div class="flex items-center bg-gray-100 rounded-lg p-1 border border-gray-200">
-                            <button @click="switchMode('safe')" :class="{'bg-white shadow-sm text-green-600 font-medium': mode === 'safe', 'text-gray-500 hover:text-gray-700': mode !== 'safe'}" class="px-3 py-1.5 rounded-md text-sm transition-all duration-200 flex items-center">
-                                <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path></svg>
-                                安全模式
-                            </button>
-                            <button @click="switchMode('convenient')" :class="{'bg-white shadow-sm text-red-500 font-medium': mode === 'convenient', 'text-gray-500 hover:text-gray-700': mode !== 'convenient'}" class="px-3 py-1.5 rounded-md text-sm transition-all duration-200 flex items-center">
-                                <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
-                                便捷模式
-                            </button>
-                        </div>
-                        
                         <!-- Settings Button -->
                         <button @click="openSettings()" class="p-2 rounded-full text-gray-400 hover:text-gray-600 hover:bg-gray-100 focus:outline-none transition-colors">
                             <span class="sr-only">设置</span>
@@ -187,18 +175,12 @@
                     <div class="flex justify-between items-center mb-3">
                         <span class="text-xs text-gray-500">已选: <span class="font-bold text-green-600" x-text="selectedCount"></span></span>
                     </div>
-                    <div class="grid grid-cols-3 gap-2">
+                    <div class="grid grid-cols-2 gap-2">
                         <button @click="extractChats()" class="flex flex-col items-center justify-center p-2 rounded hover:bg-white hover:shadow-sm text-gray-600 hover:text-green-600 transition-all border border-transparent hover:border-gray-200">
                             <svg class="h-5 w-5 mb-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
                             </svg>
                             <span class="text-xs font-medium">提取</span>
-                        </button>
-                        <button @click="restoreChats()" class="flex flex-col items-center justify-center p-2 rounded hover:bg-white hover:shadow-sm text-gray-600 hover:text-blue-600 transition-all border border-transparent hover:border-gray-200">
-                            <svg class="h-5 w-5 mb-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                            </svg>
-                            <span class="text-xs font-medium">还原</span>
                         </button>
                         <button @click="exportChats()" class="flex flex-col items-center justify-center p-2 rounded hover:bg-white hover:shadow-sm text-gray-600 hover:text-purple-600 transition-all border border-transparent hover:border-gray-200">
                             <svg class="h-5 w-5 mb-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -235,42 +217,40 @@
                 <!-- Chat Content -->
                 <div x-show="currentContact" class="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar">
                     <template x-for="msg in messages" :key="msg.id">
-                        <div :class="{'flex-row-reverse': msg.isSelf}" class="flex items-start group">
-                            <!-- Avatar -->
-                            <img class="h-10 w-10 rounded-lg shadow-sm" 
-                                 :class="{'ml-3': msg.isSelf, 'mr-3': !msg.isSelf}"
-                                 :src="msg.isSelf ? 'https://ui-avatars.com/api/?name=我&background=07C160&color=fff' : currentContact?.avatar" 
-                                 alt="">
-                            
-                            <!-- Message Body -->
-                            <div :class="{'items-end': msg.isSelf, 'items-start': !msg.isSelf}" class="flex flex-col max-w-[70%]">
-                                <div class="flex items-baseline mb-1" :class="{'flex-row-reverse': msg.isSelf}">
-                                    <span class="text-xs text-gray-400 mx-1" x-text="msg.time"></span>
-                                    <span x-show="!msg.isSelf" class="text-xs text-gray-500" x-text="msg.sender"></span>
-                                </div>
-                                
-                                <!-- Text Message -->
-                                <div x-show="!msg.type || msg.type === 'text'"
-                                     :class="{'bg-[#95EC69] text-black': msg.isSelf, 'bg-white text-gray-900': !msg.isSelf}"
-                                     class="p-3 rounded-lg shadow-sm text-sm leading-relaxed break-words relative">
-                                    <p x-text="msg.content"></p>
-                                    <!-- Arrow -->
-                                    <div :class="{'right-[-6px] border-l-[#95EC69]': msg.isSelf, 'left-[-6px] border-r-white': !msg.isSelf}"
-                                         class="absolute top-3 w-0 h-0 border-t-[6px] border-t-transparent border-b-[6px] border-b-transparent border-l-[6px] border-r-[6px]"></div>
+                        <div class="flex" :class="{'justify-end': msg.isSelf}">
+                            <div class="max-w-[70%]">
+                                <div class="flex items-baseline mb-1 text-xs text-gray-400" :class="{'justify-end': msg.isSelf}">
+                                    <span x-text="msg.senderLabel"></span>
+                                    <span class="ml-2" x-text="msg.time"></span>
                                 </div>
 
-                                <!-- File Message -->
-                                <div x-show="msg.type === 'file'" class="bg-white p-3 rounded-lg shadow-sm border border-gray-200 w-64 cursor-pointer hover:bg-gray-50 transition-colors">
-                                    <div class="flex items-center">
-                                        <div class="bg-red-100 p-2 rounded">
-                                            <svg class="w-8 h-8 text-red-500" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4z" clip-rule="evenodd"></path></svg>
-                                        </div>
-                                        <div class="ml-3 overflow-hidden">
-                                            <p class="text-sm font-medium text-gray-900 truncate" x-text="msg.content"></p>
-                                            <p class="text-xs text-gray-500">1.2 MB</p>
+                                <template x-if="msg.displayType === 'image' && msg.imageSrc">
+                                    <div @contextmenu.prevent="openMessageMenu(msg, $event)" class="rounded-lg overflow-hidden shadow-sm border border-gray-200 bg-white">
+                                        <img :src="msg.imageSrc" class="max-w-full max-h-64 object-contain" alt="">
+                                    </div>
+                                </template>
+
+                                <template x-if="msg.displayType === 'file'">
+                                    <div @contextmenu.prevent="openMessageMenu(msg, $event)" class="bg-white p-3 rounded-lg shadow-sm border border-gray-200 w-64 cursor-pointer hover:bg-gray-50 transition-colors">
+                                        <div class="flex items-center">
+                                            <div class="bg-red-100 p-2 rounded">
+                                                <svg class="w-8 h-8 text-red-500" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4z" clip-rule="evenodd"></path></svg>
+                                            </div>
+                                            <div class="ml-3 overflow-hidden">
+                                                <p class="text-sm font-medium text-gray-900 truncate" x-text="msg.fileName || '文件'"></p>
+                                                <p class="text-xs text-gray-500">本地文件</p>
+                                            </div>
                                         </div>
                                     </div>
-                                </div>
+                                </template>
+
+                                <template x-if="msg.displayType === 'text'">
+                                    <div @contextmenu.prevent="openMessageMenu(msg, $event)"
+                                         :class="{'bg-[#95EC69] text-black': msg.isSelf, 'bg-white text-gray-900': !msg.isSelf}"
+                                         class="p-3 rounded-lg shadow-sm text-sm leading-relaxed break-words">
+                                        <p x-text="msg.displayText"></p>
+                                    </div>
+                                </template>
                             </div>
                         </div>
                     </template>
@@ -279,42 +259,13 @@
         </div>
     </div>
 
-    <!-- Risk Warning Modal -->
-    <div x-show="showRiskWarning" class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 transition-opacity" x-cloak>
-        <div class="bg-white rounded-xl p-6 max-w-md shadow-2xl transform transition-all scale-100 border-t-4 border-red-500">
-            <div class="flex items-start mb-4">
-                <div class="flex-shrink-0 bg-red-100 rounded-full p-2 mr-3">
-                    <svg class="h-6 w-6 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                    </svg>
-                </div>
-                <div>
-                    <h3 class="text-xl font-bold text-gray-900">⚠️ 便捷模式风险提示</h3>
-                    <p class="text-sm text-gray-500 mt-1">请仔细阅读以下风险说明</p>
-                </div>
-            </div>
-            
-            <div class="bg-red-50 rounded-lg p-4 mb-6 border border-red-100">
-                <p class="text-gray-800 text-sm font-medium mb-2">
-                    启用便捷模式将允许程序直接修改微信原始数据库。这可能导致：
-                </p>
-                <ul class="list-disc list-inside text-sm text-gray-700 space-y-1 ml-1">
-                    <li>聊天记录丢失（如操作中断）</li>
-                    <li>微信数据损坏，导致无法启动</li>
-                    <li>需要重新登录微信</li>
-                </ul>
-            </div>
-            
-            <p class="text-gray-600 text-sm mb-6">程序会在操作前自动创建备份，但仍建议谨慎使用。建议仅在"安全模式"无法满足需求时使用。</p>
-            
-            <div class="flex gap-3">
-                <button @click="confirmModeB()" class="flex-1 bg-red-600 text-white py-2.5 rounded-lg hover:bg-red-700 font-medium transition-colors shadow-sm">
-                    我了解风险，启用
-                </button>
-                <button @click="cancelModeB()" class="flex-1 bg-white text-gray-700 border border-gray-300 py-2.5 rounded-lg hover:bg-gray-50 font-medium transition-colors">
-                    取消
-                </button>
-            </div>
+    <!-- Message Context Menu -->
+    <div x-show="messageMenu.visible" @click.away="closeMessageMenu()" class="fixed z-50" x-cloak
+         :style="`left: ${messageMenu.x}px; top: ${messageMenu.y}px;`">
+        <div class="bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden">
+            <button @click="deleteMessage(messageMenu.message)" class="px-4 py-2 text-sm text-red-600 hover:bg-red-50 w-full text-left">
+                删除这条
+            </button>
         </div>
     </div>
 

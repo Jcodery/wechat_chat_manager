@@ -8,6 +8,9 @@ pymem>=1.13.0
 # Cryptography
 pycryptodome>=3.19.0
 
+# Optional message decompression (Weixin 4.x)
+zstandard>=0.22.0
+
 # Note: SQLCipher decryption handled by pycryptodome
 # sqlcipher3-binary not available on Windows
 

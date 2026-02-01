@@ -5,9 +5,8 @@ from wechat_manager.api.routes import (
     wechat,
     contacts,
     mode_a,
-    mode_b,
     search,
     export,
 )
 
-__all__ = ["auth", "wechat", "contacts", "mode_a", "mode_b", "search", "export"]
+__all__ = ["auth", "wechat", "contacts", "mode_a", "search", "export"]

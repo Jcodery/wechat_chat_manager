@@ -62,6 +62,21 @@ class MessagesResponse(BaseModel):
     contact_id: str
 
 
+class DeleteMessageResponse(BaseModel):
+    """Response model for deleting a single message"""
+
+    deleted: bool
+
+
+class SyncResponse(BaseModel):
+    """Response model for sync"""
+
+    contact_id: str
+    new_messages: int
+    success: bool
+    error: Optional[str] = None
+
+
 def get_mode_a(
     db_handler: WeChatDBHandler = Depends(get_db_handler),
     storage: EncryptedStorage = Depends(get_storage),
@@ -125,6 +140,37 @@ async def get_extracted_messages(
         "count": len(messages),
         "contact_id": contact_id,
     }
+
+
+@router.delete(
+    "/messages/{contact_id}/{message_id}", response_model=DeleteMessageResponse
+)
+async def delete_extracted_message(
+    contact_id: str,
+    message_id: int,
+    storage: EncryptedStorage = Depends(get_storage),
+):
+    """Delete a single extracted message from local storage"""
+    if message_id <= 0:
+        raise HTTPException(status_code=400, detail="Invalid message_id")
+
+    deleted = storage.delete_message(contact_id, message_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Message not found")
+
+    return {"deleted": True}
+
+
+@router.post("/sync/{contact_id}", response_model=SyncResponse)
+async def sync_messages(
+    contact_id: str,
+    mode_a: ModeA = Depends(get_mode_a),
+):
+    """Sync new messages for a contact into local storage"""
+    result = mode_a.sync_contact(contact_id)
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("error", "Sync failed"))
+    return result
 
 
 @router.get("/check/{contact_id}")
