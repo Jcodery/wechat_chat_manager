@@ -32,7 +32,7 @@ class TestAutoDetect:
         wxid_folder = wechat_files / "wxid_abc123"
         msg_dir = wxid_folder / "Msg"
         msg_dir.mkdir(parents=True)
-        (msg_dir / "MicroMsg.db").touch()
+        (msg_dir / "MicroMsg.db").write_bytes(b"x")
 
         # Temporarily patch DEFAULT_PATHS to use our temp directory
         from wechat_manager.core import wechat_dir as wechat_dir_module
@@ -73,7 +73,7 @@ class TestManualPath:
         wxid_folder = wechat_files / "wxid_def456"
         msg_dir = wxid_folder / "Msg"
         msg_dir.mkdir(parents=True)
-        (msg_dir / "MicroMsg.db").touch()
+        (msg_dir / "MicroMsg.db").write_bytes(b"x")
 
         result = set_wechat_dir(str(wechat_files))
         assert result is True
@@ -118,7 +118,7 @@ class TestInvalidPath:
         invalid_folder = temp_dir / "wrongprefix_123"
         msg_dir = invalid_folder / "Msg"
         msg_dir.mkdir(parents=True)
-        (msg_dir / "MicroMsg.db").touch()
+        (msg_dir / "MicroMsg.db").write_bytes(b"x")
 
         result = validate_wechat_dir(str(temp_dir))
         assert result is False
@@ -133,7 +133,7 @@ class TestValidateStructure:
         wxid_folder = wechat_files / "wxid_ghi789"
         msg_dir = wxid_folder / "Msg"
         msg_dir.mkdir(parents=True)
-        (msg_dir / "MicroMsg.db").touch()
+        (msg_dir / "MicroMsg.db").write_bytes(b"x")
         (msg_dir / "MSG0.db").touch()
 
         result = validate_wechat_dir(str(wechat_files))
@@ -147,13 +147,13 @@ class TestValidateStructure:
         wxid_folder1 = wechat_files / "wxid_first"
         msg_dir1 = wxid_folder1 / "Msg"
         msg_dir1.mkdir(parents=True)
-        (msg_dir1 / "MicroMsg.db").touch()
+        (msg_dir1 / "MicroMsg.db").write_bytes(b"x")
 
         # Create second wxid folder
         wxid_folder2 = wechat_files / "wxid_second"
         msg_dir2 = wxid_folder2 / "Msg"
         msg_dir2.mkdir(parents=True)
-        (msg_dir2 / "MicroMsg.db").touch()
+        (msg_dir2 / "MicroMsg.db").write_bytes(b"x")
 
         result = validate_wechat_dir(str(wechat_files))
         assert result is True
@@ -168,7 +168,7 @@ class TestValidateStructure:
         msg_dir.mkdir(parents=True)
         config_dir.mkdir(parents=True)
 
-        (msg_dir / "MicroMsg.db").touch()
+        (msg_dir / "MicroMsg.db").write_bytes(b"x")
         (msg_dir / "MSG0.db").touch()
 
         result = validate_wechat_dir(str(wechat_files))
@@ -184,7 +184,7 @@ class TestFindWxidFolders:
         wxid_folder = wechat_files / "wxid_mno345"
         msg_dir = wxid_folder / "Msg"
         msg_dir.mkdir(parents=True)
-        (msg_dir / "MicroMsg.db").touch()
+        (msg_dir / "MicroMsg.db").write_bytes(b"x")
 
         folders = get_wxid_folders(str(wechat_files))
         assert len(folders) == 1
@@ -199,7 +199,7 @@ class TestFindWxidFolders:
             wxid_folder = wechat_files / wxid_name
             msg_dir = wxid_folder / "Msg"
             msg_dir.mkdir(parents=True)
-            (msg_dir / "MicroMsg.db").touch()
+            (msg_dir / "MicroMsg.db").write_bytes(b"x")
 
         folders = get_wxid_folders(str(wechat_files))
         assert len(folders) == 3
@@ -216,7 +216,7 @@ class TestFindWxidFolders:
             wxid_folder = wechat_files / wxid_name
             msg_dir = wxid_folder / "Msg"
             msg_dir.mkdir(parents=True)
-            (msg_dir / "MicroMsg.db").touch()
+            (msg_dir / "MicroMsg.db").write_bytes(b"x")
 
         folders = get_wxid_folders(str(wechat_files))
         # Convert to comparable paths
@@ -251,7 +251,7 @@ class TestGetMsgDir:
         wxid_path = temp_dir / "wxid_stu901"
         msg_dir = wxid_path / "Msg"
         msg_dir.mkdir(parents=True)
-        (msg_dir / "MicroMsg.db").touch()
+        (msg_dir / "MicroMsg.db").write_bytes(b"x")
 
         msg_path = get_msg_dir(str(wxid_path))
 
@@ -278,7 +278,7 @@ class TestGetCurrentDir:
         wxid_folder = wechat_files / "wxid_vwx234"
         msg_dir = wxid_folder / "Msg"
         msg_dir.mkdir(parents=True)
-        (msg_dir / "MicroMsg.db").touch()
+        (msg_dir / "MicroMsg.db").write_bytes(b"x")
 
         set_wechat_dir(str(wechat_files))
         result = get_current_wechat_dir()

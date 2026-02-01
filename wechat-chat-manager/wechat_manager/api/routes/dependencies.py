@@ -10,6 +10,7 @@ Provides FastAPI dependency injection for:
 from pathlib import Path
 from fastapi import HTTPException
 
+from wechat_manager.core.config import load_config
 from wechat_manager.core import wechat_dir, key_extractor
 from wechat_manager.core.db_handler import WeChatDBHandler
 from wechat_manager.core.storage import EncryptedStorage
@@ -34,8 +35,9 @@ def get_db_handler() -> WeChatDBHandler:
     Raises:
         HTTPException: If WeChat directory or key is not configured
     """
-    current_dir = wechat_dir.get_current_wechat_dir()
-    if not current_dir:
+    cfg = load_config()
+    root_dir = wechat_dir.get_current_wechat_dir() or cfg.root_path
+    if not root_dir:
         raise HTTPException(
             status_code=400,
             detail="WeChat directory not set. Please use /api/wechat/detect or /api/wechat/set-dir first.",
@@ -48,14 +50,43 @@ def get_db_handler() -> WeChatDBHandler:
             detail="Database key not available. Please use /api/wechat/key/extract or /api/wechat/key/manual first.",
         )
 
-    # Get the first wxid folder
-    wxid_folders = wechat_dir.get_wxid_folders(current_dir)
+    wxid_folders = wechat_dir.get_wxid_folders(root_dir)
     if not wxid_folders:
         raise HTTPException(
             status_code=400, detail="No wxid folders found in WeChat directory."
         )
 
-    return WeChatDBHandler(wxid_folders[0], key)
+    # Explicit account selection when multiple wxid folders exist.
+    if len(wxid_folders) == 1:
+        selected = wxid_folders[0]
+    else:
+        if not cfg.active_wxid:
+            names = [Path(p).name for p in wxid_folders]
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Multiple accounts found: {names}. "
+                    "Please select an account via /api/wechat/accounts/active"
+                ),
+            )
+
+        selected = None
+        for p in wxid_folders:
+            if Path(p).name == cfg.active_wxid:
+                selected = p
+                break
+
+        if not selected:
+            names = [Path(p).name for p in wxid_folders]
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Active account '{cfg.active_wxid}' not found. Available: {names}. "
+                    "Please re-select via /api/wechat/accounts/active"
+                ),
+            )
+
+    return WeChatDBHandler(selected, key)
 
 
 def get_storage() -> EncryptedStorage:

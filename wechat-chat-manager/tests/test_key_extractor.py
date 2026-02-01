@@ -28,17 +28,26 @@ class TestWeChatProcessDetection:
     def test_wechat_process_detection_when_running(self, mock_process_iter):
         """Test detecting WeChat.exe when it is running."""
         mock_proc = MagicMock()
-        mock_proc.info = {"name": "WeChat.exe"}
+        mock_proc.info = {"pid": 123, "name": "WeChat.exe"}
         mock_process_iter.return_value = [mock_proc]
 
         assert is_wechat_running() is True
-        mock_process_iter.assert_called_once_with(["name"])
+        mock_process_iter.assert_called_once_with(["pid", "name"])
+
+    @patch("wechat_manager.core.key_extractor.psutil.process_iter")
+    def test_wechat_process_detection_weixin_when_running(self, mock_process_iter):
+        """Test detecting Weixin.exe when it is running."""
+        mock_proc = MagicMock()
+        mock_proc.info = {"pid": 123, "name": "Weixin.exe"}
+        mock_process_iter.return_value = [mock_proc]
+
+        assert is_wechat_running() is True
 
     @patch("wechat_manager.core.key_extractor.psutil.process_iter")
     def test_wechat_process_detection_when_not_running(self, mock_process_iter):
         """Test detecting WeChat.exe when it is NOT running."""
         mock_proc = MagicMock()
-        mock_proc.info = {"name": "chrome.exe"}
+        mock_proc.info = {"pid": 123, "name": "chrome.exe"}
         mock_process_iter.return_value = [mock_proc]
 
         assert is_wechat_running() is False

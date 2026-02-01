@@ -8,10 +8,13 @@ Provides endpoints for:
 - Key extraction and management
 """
 
+from pathlib import Path
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional, List
 
+from wechat_manager.core.config import load_config, set_active_wxid, set_root_path
 from wechat_manager.core import wechat_dir
 from wechat_manager.core import key_extractor
 
@@ -40,6 +43,22 @@ class WeChatDirResponse(BaseModel):
     wxid_folders: Optional[List[str]] = None
 
 
+class AccountInfo(BaseModel):
+    wxid: str
+    path: str
+    version: Optional[int] = None
+    is_active: bool = False
+
+
+class AccountListResponse(BaseModel):
+    accounts: List[AccountInfo]
+    active_account: Optional[str] = None
+
+
+class SetActiveAccountRequest(BaseModel):
+    wxid: str
+
+
 class WeChatStatusResponse(BaseModel):
     """Response model for WeChat status"""
 
@@ -62,11 +81,25 @@ class KeyResponse(BaseModel):
 @router.get("/detect", response_model=WeChatDirResponse)
 async def detect_wechat_dir():
     """Auto-detect WeChat directory"""
+    cfg = load_config()
+
+    # Prefer persisted custom path
+    if cfg.root_path and wechat_dir.validate_wechat_dir(cfg.root_path):
+        wechat_dir.set_wechat_dir(cfg.root_path)
+        wxid_folders = wechat_dir.get_wxid_folders(cfg.root_path)
+        return {
+            "success": True,
+            "path": cfg.root_path,
+            "message": "Using saved WeChat directory",
+            "wxid_folders": wxid_folders,
+        }
+
     detected_path = wechat_dir.auto_detect_wechat_dir()
 
     if detected_path:
         # Also set it as current
         wechat_dir.set_wechat_dir(detected_path)
+        set_root_path(detected_path)
         wxid_folders = wechat_dir.get_wxid_folders(detected_path)
         return {
             "success": True,
@@ -89,19 +122,45 @@ async def set_wechat_directory(req: SetDirRequest):
     if not req.path:
         raise HTTPException(status_code=400, detail="Path is required")
 
-    if wechat_dir.set_wechat_dir(req.path):
-        wxid_folders = wechat_dir.get_wxid_folders(req.path)
-        return {
-            "success": True,
-            "path": req.path,
-            "message": "WeChat directory set successfully",
-            "wxid_folders": wxid_folders,
-        }
-    else:
+    input_path = Path(req.path)
+    wxid_dir: Optional[Path] = None
+    for p in [input_path, *input_path.parents]:
+        if p.name.startswith("wxid_"):
+            wxid_dir = p
+            break
+
+    root_path = str(wxid_dir.parent) if wxid_dir is not None else str(input_path)
+    requested_wxid = wxid_dir.name if wxid_dir is not None else None
+
+    if not wechat_dir.set_wechat_dir(root_path):
         raise HTTPException(
             status_code=400,
-            detail="Invalid WeChat directory. Make sure it contains wxid_* folders with Msg subdirectory.",
+            detail="Invalid WeChat directory. It must contain wxid_* folders with Msg (V3) or db_storage (V4).",
         )
+
+    # Persist root path
+    set_root_path(root_path)
+
+    wxid_folders = wechat_dir.get_wxid_folders(root_path)
+    wxid_names = [Path(p).name for p in wxid_folders]
+
+    # Set active account if user provided a wxid path
+    if requested_wxid and requested_wxid in wxid_names:
+        set_active_wxid(requested_wxid)
+    elif len(wxid_folders) == 1:
+        set_active_wxid(Path(wxid_folders[0]).name)
+    else:
+        # Keep previous active if still valid; otherwise clear it
+        cfg = load_config()
+        if cfg.active_wxid and cfg.active_wxid not in wxid_names:
+            set_active_wxid(None)
+
+    return {
+        "success": True,
+        "path": root_path,
+        "message": "WeChat directory set successfully",
+        "wxid_folders": wxid_folders,
+    }
 
 
 @router.get("/current-dir", response_model=WeChatDirResponse)
@@ -126,6 +185,46 @@ async def get_current_wechat_dir():
         }
 
 
+@router.get("/accounts", response_model=AccountListResponse)
+async def list_accounts():
+    cfg = load_config()
+    root = wechat_dir.get_current_wechat_dir() or cfg.root_path
+    if not root:
+        return {"accounts": [], "active_account": cfg.active_wxid}
+
+    wxid_folders = wechat_dir.get_wxid_folders(root)
+    accounts: List[dict] = []
+    for folder_path in wxid_folders:
+        wxid = Path(folder_path).name
+        version = wechat_dir.detect_wxid_version(folder_path)
+        accounts.append(
+            {
+                "wxid": wxid,
+                "path": folder_path,
+                "version": version,
+                "is_active": wxid == cfg.active_wxid,
+            }
+        )
+
+    return {"accounts": accounts, "active_account": cfg.active_wxid}
+
+
+@router.post("/accounts/active", response_model=KeyResponse)
+async def set_active_account(req: SetActiveAccountRequest):
+    cfg = load_config()
+    root = wechat_dir.get_current_wechat_dir() or cfg.root_path
+    if not root:
+        raise HTTPException(status_code=400, detail="WeChat directory not set")
+
+    wxid_folders = wechat_dir.get_wxid_folders(root)
+    valid = {Path(p).name for p in wxid_folders}
+    if req.wxid not in valid:
+        raise HTTPException(status_code=400, detail=f"Account not found: {req.wxid}")
+
+    set_active_wxid(req.wxid)
+    return {"success": True, "message": f"Active account set to {req.wxid}"}
+
+
 @router.get("/status", response_model=WeChatStatusResponse)
 async def wechat_status():
     """Check if WeChat is running"""
@@ -143,7 +242,40 @@ async def key_status():
 async def extract_key():
     """Extract key from WeChat process memory"""
     try:
-        key = key_extractor.extract_key_from_memory()
+        # Prefer validating against the active account DB if configured.
+        cfg = load_config()
+        root = wechat_dir.get_current_wechat_dir() or cfg.root_path
+        wxid_path: Optional[Path] = None
+        if root:
+            wxid_folders = wechat_dir.get_wxid_folders(root)
+            if cfg.active_wxid:
+                for p in wxid_folders:
+                    if Path(p).name == cfg.active_wxid:
+                        wxid_path = Path(p)
+                        break
+            elif len(wxid_folders) == 1:
+                wxid_path = Path(wxid_folders[0])
+
+        db_path = None
+        if wxid_path is not None:
+            # V4: db_storage/contact/contact.db, V3: Msg/MicroMsg.db
+            v4_contact = wxid_path / "db_storage" / "contact" / "contact.db"
+            v3_micromsg = wxid_path / "Msg" / "MicroMsg.db"
+            if v4_contact.exists() and v4_contact.stat().st_size > 0:
+                db_path = str(v4_contact)
+            elif v3_micromsg.exists() and v3_micromsg.stat().st_size > 0:
+                db_path = str(v3_micromsg)
+
+        if not db_path:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "WeChat directory/account not configured for validation. "
+                    "Please set directory and select an account first."
+                ),
+            )
+
+        key = key_extractor.extract_key_from_memory(db_path=db_path)
 
         if key:
             # Save to keyring
@@ -157,10 +289,8 @@ async def extract_key():
                 "success": False,
                 "message": "Could not extract key from memory",
             }
-    except key_extractor.WeChatNotRunningError:
-        raise HTTPException(
-            status_code=400, detail="WeChat is not running. Please start WeChat first."
-        )
+    except key_extractor.WeChatNotRunningError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except key_extractor.KeyExtractionError as e:
         raise HTTPException(status_code=500, detail=str(e))
 

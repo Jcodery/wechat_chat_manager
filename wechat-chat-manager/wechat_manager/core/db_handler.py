@@ -8,7 +8,6 @@
 import os
 import re
 import sqlite3
-import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -41,7 +40,18 @@ class WeChatDBHandler:
         self.wechat_dir = Path(wechat_dir)
         self.key = key
         self._msg_dir = self.wechat_dir / "Msg"
-        # 缓存解密后的数据库文件路径
+        self._db_storage_dir = self.wechat_dir / "db_storage"
+
+        # Layout/version hint
+        self._version_hint: Optional[int] = None
+        if (self._db_storage_dir / "contact" / "contact.db").exists():
+            # Weixin 4.x db_storage layout
+            self._version_hint = 4
+        elif (self._msg_dir / "MicroMsg.db").exists():
+            # Legacy Msg layout
+            self._version_hint = 3
+
+        # Cache decrypted DB file paths
         self._decrypted_cache: Dict[str, str] = {}
 
     def __del__(self):
@@ -100,12 +110,62 @@ class WeChatDBHandler:
         # 检查是否是加密数据库
         if is_encrypted_database(db_path):
             # 解密到临时文件
-            decrypted_path = decrypt_database(self.key, db_path)
+            decrypted_path = decrypt_database(
+                self.key, db_path, version_hint=self._version_hint
+            )
             self._decrypted_cache[db_path] = decrypted_path
             return sqlite3.connect(decrypted_path)
         else:
             # 未加密的数据库（测试用），直接连接
             return sqlite3.connect(db_path)
+
+    def _get_contacts_db_path(self) -> Path:
+        # Prefer V4 db_storage layout if present and non-empty
+        v4 = self._db_storage_dir / "contact" / "contact.db"
+        if v4.exists() and v4.stat().st_size > 0:
+            return v4
+        return self._msg_dir / "MicroMsg.db"
+
+    def _get_message_db_paths(self) -> List[str]:
+        # V4: db_storage/message/message_*.db
+        msg_dir = self._db_storage_dir / "message"
+        if msg_dir.exists():
+            dbs = []
+            for p in msg_dir.glob("message_*.db"):
+                # Keep only shards like message_0.db, exclude message_fts.db, message_resource.db
+                name = p.name
+                if not name.startswith("message_"):
+                    continue
+                suffix = name[len("message_") : -len(".db")]
+                if suffix.isdigit():
+                    dbs.append(p)
+            dbs.sort(key=lambda p: int(p.stem.split("_")[-1]))
+            return [str(p) for p in dbs]
+
+        # V3: Msg/MSG*.db
+        msg_files = []
+        if self._msg_dir.exists():
+            for file_path in self._msg_dir.glob("MSG*.db"):
+                if file_path.is_file():
+                    msg_files.append(str(file_path))
+        msg_files.sort(key=lambda p: Path(p).name)
+        return msg_files
+
+    @staticmethod
+    def _find_table(conn: sqlite3.Connection, candidates: List[str]) -> Optional[str]:
+        try:
+            rows = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        except Exception:
+            return None
+
+        table_map = {str(r[0]).lower(): str(r[0]) for r in rows}
+        for c in candidates:
+            hit = table_map.get(c.lower())
+            if hit:
+                return hit
+        return None
 
     def get_contacts(self) -> List[Contact]:
         """读取联系人列表
@@ -115,15 +175,24 @@ class WeChatDBHandler:
         Returns:
             联系人对象列表
         """
-        db_path = self._msg_dir / "MicroMsg.db"
+        db_path = self._get_contacts_db_path()
+        if not db_path.exists() or db_path.stat().st_size == 0:
+            raise DecryptionError(f"Contacts database is missing or empty: {db_path}")
+
         conn = self.connect(str(db_path))
 
         try:
-            cursor = conn.execute("""
-                SELECT UserName, NickName, Alias, Remark, Type 
-                FROM Contact 
+            contact_table = self._find_table(conn, ["Contact", "contact"])
+            if not contact_table:
+                raise DecryptionError("Contact table not found")
+
+            cursor = conn.execute(
+                f"""
+                SELECT UserName, NickName, Alias, Remark, Type
+                FROM {contact_table}
                 WHERE Type IN (1, 2, 3)
-            """)
+            """
+            )
 
             contacts = []
             for row in cursor.fetchall():
@@ -150,14 +219,23 @@ class WeChatDBHandler:
         Returns:
             群聊对象列表
         """
-        db_path = self._msg_dir / "MicroMsg.db"
+        db_path = self._get_contacts_db_path()
+        if not db_path.exists() or db_path.stat().st_size == 0:
+            raise DecryptionError(f"Contacts database is missing or empty: {db_path}")
+
         conn = self.connect(str(db_path))
 
         try:
-            cursor = conn.execute("""
-                SELECT ChatRoomName, UserNameList 
-                FROM ChatRoom
-            """)
+            chatroom_table = self._find_table(conn, ["ChatRoom", "chatroom"])
+            if not chatroom_table:
+                return []
+
+            cursor = conn.execute(
+                f"""
+                SELECT ChatRoomName, UserNameList
+                FROM {chatroom_table}
+            """
+            )
 
             chatrooms = []
             for row in cursor.fetchall():
@@ -216,41 +294,81 @@ class WeChatDBHandler:
         conn = self.connect(db_path)
 
         try:
-            # 首先查询 Name2Id 表获取 TalkerId
-            cursor = conn.execute(
-                """
-                SELECT rowId FROM Name2Id WHERE UsrName = ?
-            """,
-                (contact_id,),
-            )
-
-            row = cursor.fetchone()
-            if row is None:
+            msg_table = self._find_table(conn, ["MSG", "msg"])
+            if not msg_table:
                 return []
 
-            talker_id = row[0]
+            cols = conn.execute(f"PRAGMA table_info({msg_table})").fetchall()
+            col_map = {str(r[1]).lower(): str(r[1]) for r in cols}
 
-            # 然后查询消息
-            cursor = conn.execute(
-                """
-                SELECT localId, TalkerId, Type, SubType, CreateTime, IsSender, StrContent
-                FROM MSG
-                WHERE TalkerId = ? AND Type = 1
-                ORDER BY CreateTime DESC
-                LIMIT ?
-            """,
-                (talker_id, limit),
+            col_local_id = col_map.get("localid")
+            col_type = col_map.get("type")
+            col_create = col_map.get("createtime")
+            col_sender = col_map.get("issender")
+            col_content = col_map.get("strcontent") or col_map.get("content")
+
+            if not (
+                col_local_id and col_type and col_create and col_sender and col_content
+            ):
+                return []
+
+            col_talkerid = col_map.get("talkerid")
+            col_talker = col_map.get("talker")
+
+            params = []
+            where_clause = ""
+            if col_talkerid:
+                name2id_table = self._find_table(
+                    conn, ["Name2Id", "Name2ID", "name2id"]
+                )
+                if not name2id_table:
+                    return []
+
+                # Prefer SQLite rowid for robustness
+                talker_id = None
+                for usr_col in ("UsrName", "usrName", "username", "UserName"):
+                    try:
+                        row = conn.execute(
+                            f"SELECT rowid FROM {name2id_table} WHERE {usr_col} = ?",
+                            (contact_id,),
+                        ).fetchone()
+                        if row is not None:
+                            talker_id = row[0]
+                            break
+                    except sqlite3.OperationalError:
+                        continue
+
+                if talker_id is None:
+                    return []
+
+                where_clause = f"WHERE {col_talkerid} = ?"
+                params = [talker_id]
+            elif col_talker:
+                where_clause = f"WHERE {col_talker} = ?"
+                params = [contact_id]
+            else:
+                return []
+
+            # Only text messages (Type=1) when available
+            where_clause += f" AND {col_type} = 1"
+
+            sql = (
+                f"SELECT {col_local_id}, {col_type}, {col_create}, {col_sender}, {col_content} "
+                f"FROM {msg_table} {where_clause} "
+                f"ORDER BY {col_create} DESC LIMIT ?"
             )
+            params.append(int(limit))
+            cursor = conn.execute(sql, tuple(params))
 
             messages = []
             for row in cursor.fetchall():
                 message = Message(
                     id=row[0],
                     contact_id=contact_id,
-                    content=row[6] or "",
-                    create_time=row[4],
-                    is_sender=bool(row[5]),
-                    msg_type=row[2],
+                    content=row[4] or "",
+                    create_time=row[2],
+                    is_sender=bool(row[3]),
+                    msg_type=row[1],
                 )
                 messages.append(message)
 
@@ -266,17 +384,4 @@ class WeChatDBHandler:
         Returns:
             数据库文件路径列表
         """
-        msg_files = []
-
-        if not self._msg_dir.exists():
-            return msg_files
-
-        # 查找所有 MSG*.db 文件
-        for file_path in self._msg_dir.glob("MSG*.db"):
-            if file_path.is_file():
-                msg_files.append(str(file_path))
-
-        # 按文件名排序，确保 MSG0.db, MSG1.db... 的顺序
-        msg_files.sort(key=lambda p: Path(p).name)
-
-        return msg_files
+        return self._get_message_db_paths()

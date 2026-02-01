@@ -56,8 +56,8 @@ def mock_wechat_dir(temp_dir: Path) -> Path:
     msg_dir = wechat_dir / "Msg"
     msg_dir.mkdir(parents=True)
 
-    # 创建空的占位文件
-    (msg_dir / "MicroMsg.db").touch()
+    # 创建非空占位文件（新版本验证要求非空）
+    (msg_dir / "MicroMsg.db").write_bytes(b"x")
     (msg_dir / "MSG0.db").touch()
 
     return wechat_dir

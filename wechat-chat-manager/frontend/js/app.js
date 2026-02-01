@@ -35,6 +35,9 @@ document.addEventListener('alpine:init', () => {
         // WeChat config
         wechatDir: '',
         hasKey: false,
+        accounts: [],
+        activeAccount: null,
+        manualKey: '',
 
         // API Configuration
         apiBase: '/api',
@@ -138,6 +141,18 @@ document.addEventListener('alpine:init', () => {
                 console.error('Failed to fetch current WeChat dir', e);
             }
 
+            // accounts
+            try {
+                const accRes = await fetch(`${this.apiBase}/wechat/accounts`);
+                if (accRes.ok) {
+                    const accData = await accRes.json();
+                    this.accounts = accData.accounts || [];
+                    this.activeAccount = accData.active_account;
+                }
+            } catch (e) {
+                console.error('Failed to fetch accounts', e);
+            }
+
             // key status
             try {
                 const keyRes = await fetch(`${this.apiBase}/wechat/key/status`);
@@ -151,6 +166,51 @@ document.addEventListener('alpine:init', () => {
 
             if (autoDetectIfMissing && !this.wechatDir) {
                 await this.detectWeChatDir(false);
+            }
+        },
+
+        async setActiveAccount(wxid) {
+            try {
+                const res = await fetch(`${this.apiBase}/wechat/accounts/active`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ wxid })
+                });
+                if (!res.ok) throw new Error('Failed to set active account');
+                
+                await this.refreshWeChatConfig(false);
+                await this.loadContacts();
+                this.showNotification('已切换账号', 'success');
+            } catch (e) {
+                this.showNotification('切换账号失败', 'error');
+            }
+        },
+
+        async saveManualKey() {
+            if (!this.manualKey || this.manualKey.length !== 64) {
+                this.showNotification('请输入有效的64位密钥', 'error');
+                return;
+            }
+            this.loading = true;
+            try {
+                const res = await fetch(`${this.apiBase}/wechat/key/manual`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ key: this.manualKey })
+                });
+                if (!res.ok) throw new Error('Failed to save key');
+                
+                this.manualKey = '';
+                await this.refreshWeChatConfig(false);
+                this.showNotification('密钥已保存', 'success');
+                
+                if (this.wechatDir) {
+                    await this.loadContacts();
+                }
+            } catch (e) {
+                this.showNotification('保存密钥失败', 'error');
+            } finally {
+                this.loading = false;
             }
         },
 
@@ -273,6 +333,12 @@ document.addEventListener('alpine:init', () => {
                 this.contacts = [];
                 this.chatrooms = [];
                 this.showNotification('请先获取解密密钥（设置 → 重新获取）', 'warning');
+                return;
+            }
+            if (this.accounts.length > 1 && !this.activeAccount) {
+                this.contacts = [];
+                this.chatrooms = [];
+                this.showNotification('请先在设置中选择微信账号', 'warning');
                 return;
             }
 
