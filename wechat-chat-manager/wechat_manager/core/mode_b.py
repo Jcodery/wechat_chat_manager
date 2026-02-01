@@ -74,7 +74,12 @@ class ModeB:
                 - backup_dir_writable: True if backup directory is writable
                 - db_accessible: True if WeChat databases can be accessed
         """
+        # Mode B mutates the source databases. Weixin 4.x schema differs significantly
+        # and is not supported by the current backup/delete/restore implementation.
+        supported_mode_b = getattr(self.db_handler, "_version_hint", None) != 4
+
         checks = {
+            "mode_b_supported": supported_mode_b,
             "wechat_closed": not is_wechat_running(),
             "backup_dir_writable": self._check_backup_writable(),
             "db_accessible": self._check_db_accessible(),
@@ -123,8 +128,8 @@ class ModeB:
         Returns:
             bool: True if backup is valid and readable
         """
-        backup_path = Path(backup_path)
-        backup_msg_dir = backup_path / "Msg"
+        backup_dir = Path(backup_path)
+        backup_msg_dir = backup_dir / "Msg"
 
         # Check backup directory exists
         if not backup_msg_dir.exists():
@@ -158,7 +163,7 @@ class ModeB:
             return False
 
         # Mark as verified if this is the last backup
-        if self._last_backup_path == str(backup_path):
+        if self._last_backup_path == str(backup_dir):
             self._backup_verified = True
 
         return True

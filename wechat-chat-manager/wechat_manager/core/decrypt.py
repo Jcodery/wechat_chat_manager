@@ -190,7 +190,9 @@ def _candidate_profiles(version_hint: Optional[int]) -> list[CipherProfile]:
 
     if version_hint == 4:
         base = _PROFILE_V4_DEFAULT
+        # Weixin 4.x may keep legacy SQLCipher3 parameters, so try V3 first.
         return [
+            _PROFILE_V3,
             base,
             replace(base, page_num_endian="le"),
             replace(base, mac_key_mode="enc_key_iter2"),

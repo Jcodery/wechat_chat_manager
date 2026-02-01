@@ -17,6 +17,7 @@ from typing import Optional, List
 from wechat_manager.core.config import load_config, set_active_wxid, set_root_path
 from wechat_manager.core import wechat_dir
 from wechat_manager.core import key_extractor
+from wechat_manager.core.decrypt import verify_key
 
 
 router = APIRouter()
@@ -299,7 +300,51 @@ async def extract_key():
 async def set_manual_key(req: ManualKeyRequest):
     """Set key manually"""
     try:
-        key_extractor.set_manual_key(req.key)
+        cfg = load_config()
+        root = wechat_dir.get_current_wechat_dir() or cfg.root_path
+        if not root:
+            raise HTTPException(status_code=400, detail="WeChat directory not set")
+
+        wxid_folders = wechat_dir.get_wxid_folders(root)
+        wxid_path: Optional[Path] = None
+        if cfg.active_wxid:
+            for p in wxid_folders:
+                if Path(p).name == cfg.active_wxid:
+                    wxid_path = Path(p)
+                    break
+        elif len(wxid_folders) == 1:
+            wxid_path = Path(wxid_folders[0])
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Multiple accounts found. Please select an account first.",
+            )
+
+        if wxid_path is None:
+            raise HTTPException(status_code=400, detail="Active account not found")
+
+        v4_contact = wxid_path / "db_storage" / "contact" / "contact.db"
+        v3_micromsg = wxid_path / "Msg" / "MicroMsg.db"
+        db_path = None
+        if v4_contact.exists() and v4_contact.stat().st_size > 0:
+            db_path = str(v4_contact)
+        elif v3_micromsg.exists() and v3_micromsg.stat().st_size > 0:
+            db_path = str(v3_micromsg)
+
+        if not db_path:
+            raise HTTPException(
+                status_code=400,
+                detail="No valid database file found for validation under selected account.",
+            )
+
+        key_norm = (req.key or "").strip().lower()
+        if not verify_key(key_norm, db_path, version_hint=None):
+            raise HTTPException(
+                status_code=400,
+                detail="Key does not match the selected account database (HMAC verify failed).",
+            )
+
+        key_extractor.set_manual_key(key_norm)
         return {
             "success": True,
             "message": "Key set successfully",

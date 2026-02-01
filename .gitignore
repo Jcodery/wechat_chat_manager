@@ -6,3 +6,9 @@ nul
 
 # Python virtualenvs
 .venv/
+
+# Scratch / vendor
+.tmp/
+
+# Local session notes
+session-ses_*.md

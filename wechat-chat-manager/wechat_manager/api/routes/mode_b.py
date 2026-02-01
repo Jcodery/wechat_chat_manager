@@ -103,6 +103,14 @@ async def preflight_check(mode_b: ModeB = Depends(get_mode_b)):
 async def create_backup(mode_b: ModeB = Depends(get_mode_b)):
     """Create backup of WeChat Msg directory"""
     try:
+        all_passed, checks = mode_b.pre_flight_check()
+        if not all_passed:
+            failed = [k for k, v in checks.items() if not v]
+            raise HTTPException(
+                status_code=400,
+                detail=f"Pre-flight checks failed: {', '.join(failed)}",
+            )
+
         backup_path = mode_b.create_backup()
 
         # Verify the backup

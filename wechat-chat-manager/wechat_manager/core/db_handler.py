@@ -8,8 +8,9 @@
 import os
 import re
 import sqlite3
+import hashlib
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from wechat_manager.core.decrypt import (
     DecryptionError,
@@ -151,6 +152,59 @@ class WeChatDBHandler:
         msg_files.sort(key=lambda p: Path(p).name)
         return msg_files
 
+    def _guess_self_username_v4(self) -> str:
+        """Best-effort derive the current account username for Weixin 4.x.
+
+        Weixin 4.x folder names are often like: wxid_<base>_<random>.
+        The message DB Name2Id usually stores the base username (without the last suffix).
+        """
+
+        name = self.wechat_dir.name
+        if not name.startswith("wxid_"):
+            return name
+        parts = name.split("_")
+        if len(parts) <= 2:
+            return name
+        return "_".join(parts[:-1])
+
+    @staticmethod
+    def _normalize_epoch_seconds(v: Any) -> int:
+        if v is None:
+            return 0
+        if isinstance(v, bool):
+            n = int(v)
+        elif isinstance(v, int):
+            n = v
+        elif isinstance(v, float):
+            n = int(v)
+        elif isinstance(v, str):
+            try:
+                n = int(v)
+            except Exception:
+                return 0
+        elif isinstance(v, (bytes, bytearray, memoryview)):
+            try:
+                n = int(bytes(v).decode("utf-8", errors="ignore") or "0")
+            except Exception:
+                return 0
+        else:
+            return 0
+        # Heuristic: values >= 1e12 are milliseconds.
+        if n >= 1_000_000_000_000:
+            return int(n // 1000)
+        return n
+
+    @staticmethod
+    def _to_text(v: object) -> str:
+        if v is None:
+            return ""
+        if isinstance(v, (bytes, bytearray, memoryview)):
+            try:
+                return bytes(v).decode("utf-8")
+            except Exception:
+                return bytes(v).decode("utf-8", errors="replace")
+        return str(v)
+
     @staticmethod
     def _find_table(conn: sqlite3.Connection, candidates: List[str]) -> Optional[str]:
         try:
@@ -186,13 +240,47 @@ class WeChatDBHandler:
             if not contact_table:
                 raise DecryptionError("Contact table not found")
 
-            cursor = conn.execute(
-                f"""
-                SELECT UserName, NickName, Alias, Remark, Type
-                FROM {contact_table}
-                WHERE Type IN (1, 2, 3)
-            """
+            cols = conn.execute(f"PRAGMA table_info({contact_table})").fetchall()
+            col_map = {str(r[1]).lower(): str(r[1]) for r in cols}
+
+            def _pick(*names: str) -> Optional[str]:
+                for n in names:
+                    hit = col_map.get(n.lower())
+                    if hit:
+                        return hit
+                return None
+
+            col_user = _pick(
+                "UserName",
+                "username",
+                "UsrName",
+                "usrname",
+                "user_name",
+                "userName",
             )
+            col_nick = _pick("NickName", "nick_name", "nickname")
+            col_alias = _pick("Alias", "alias")
+            col_remark = _pick("Remark", "remark", "remark_name", "remarkname")
+            col_type = _pick("Type", "type", "local_type", "localtype")
+
+            if not col_user:
+                raise DecryptionError(
+                    "Unsupported contact schema: missing username column"
+                )
+
+            select_parts = [
+                f"{col_user} AS username",
+                f"{col_nick} AS nickname" if col_nick else "'' AS nickname",
+                f"{col_alias} AS alias" if col_alias else "NULL AS alias",
+                f"{col_remark} AS remark" if col_remark else "NULL AS remark",
+                f"{col_type} AS contact_type" if col_type else "0 AS contact_type",
+            ]
+
+            sql = f"SELECT {', '.join(select_parts)} FROM {contact_table}"
+            if col_type:
+                sql += f" WHERE {col_type} IN (1, 2, 3)"
+
+            cursor = conn.execute(sql)
 
             contacts = []
             for row in cursor.fetchall():
@@ -203,7 +291,7 @@ class WeChatDBHandler:
                     nickname=row[1] or "",
                     alias=row[2],
                     remark=row[3],
-                    contact_type=row[4],
+                    contact_type=int(row[4] or 0),
                 )
                 contacts.append(contact)
 
@@ -226,26 +314,72 @@ class WeChatDBHandler:
         conn = self.connect(str(db_path))
 
         try:
-            chatroom_table = self._find_table(conn, ["ChatRoom", "chatroom"])
+            chatroom_table = self._find_table(
+                conn, ["ChatRoom", "chatroom", "chat_room", "chatroom"]
+            )
             if not chatroom_table:
                 return []
 
-            cursor = conn.execute(
-                f"""
-                SELECT ChatRoomName, UserNameList
-                FROM {chatroom_table}
-            """
+            cols = conn.execute(f"PRAGMA table_info({chatroom_table})").fetchall()
+            col_map = {str(r[1]).lower(): str(r[1]) for r in cols}
+
+            def _pick(*names: str) -> Optional[str]:
+                for n in names:
+                    hit = col_map.get(n.lower())
+                    if hit:
+                        return hit
+                return None
+
+            # Legacy ChatRoom table: ChatRoomName + UserNameList
+            col_room_name = _pick("ChatRoomName", "chatroomname", "username", "name")
+            col_user_list = _pick(
+                "UserNameList", "usernamelist", "member_list", "members"
             )
+            if col_room_name and col_user_list:
+                cursor = conn.execute(
+                    f"SELECT {col_room_name}, {col_user_list} FROM {chatroom_table}"
+                )
 
-            chatrooms = []
-            for row in cursor.fetchall():
-                # UserNameList 是以分号分隔的成员列表
-                members = row[1].split(";") if row[1] else []
-                # 过滤空字符串
-                members = [m for m in members if m]
+                chatrooms = []
+                for row in cursor.fetchall():
+                    members = str(row[1] or "").split(";") if row[1] else []
+                    members = [m for m in members if m]
+                    chatrooms.append(ChatRoom(name=str(row[0]), members=members))
+                return chatrooms
 
-                chatroom = ChatRoom(name=row[0], members=members)
-                chatrooms.append(chatroom)
+            # Weixin 4.x contact.db: chat_room(id, username, ...) + chatroom_member(room_id, member_id)
+            col_id = _pick("id", "room_id")
+            if not col_id or not col_room_name:
+                return []
+
+            member_table = self._find_table(
+                conn, ["chatroom_member", "ChatRoomMember", "chatroommember"]
+            )
+            member_cols = (
+                conn.execute(f"PRAGMA table_info({member_table})").fetchall()
+                if member_table
+                else []
+            )
+            member_map = {str(r[1]).lower(): str(r[1]) for r in member_cols}
+            col_member_room = member_map.get("room_id")
+            col_member_id = member_map.get("member_id")
+
+            rooms = conn.execute(
+                f"SELECT {col_id}, {col_room_name} FROM {chatroom_table}"
+            ).fetchall()
+
+            chatrooms: List[ChatRoom] = []
+            for r in rooms:
+                room_id = r[0]
+                room_name = str(r[1])
+                members: List[str] = []
+                if member_table and col_member_room and col_member_id:
+                    m_rows = conn.execute(
+                        f"SELECT {col_member_id} FROM {member_table} WHERE {col_member_room} = ?",
+                        (room_id,),
+                    ).fetchall()
+                    members = [str(m[0]) for m in m_rows if m and m[0]]
+                chatrooms.append(ChatRoom(name=room_name, members=members))
 
             return chatrooms
         finally:
@@ -271,7 +405,7 @@ class WeChatDBHandler:
             all_messages.extend(messages)
 
             # 如果已经达到限制，提前退出
-            if len(all_messages) >= limit:
+            if self._version_hint != 4 and len(all_messages) >= limit:
                 break
 
         # 按时间排序并限制数量
@@ -294,6 +428,110 @@ class WeChatDBHandler:
         conn = self.connect(db_path)
 
         try:
+            # Weixin 4.x: per-contact tables Msg_{md5(username)}
+            md5 = hashlib.md5(str(contact_id).encode("utf-8")).hexdigest()
+            v4_table = self._find_table(conn, [f"Msg_{md5}", f"msg_{md5}"])
+            if v4_table:
+                cols = conn.execute(f"PRAGMA table_info({v4_table})").fetchall()
+                col_map = {str(r[1]).lower(): str(r[1]) for r in cols}
+
+                def _pick(*names: str) -> Optional[str]:
+                    for n in names:
+                        hit = col_map.get(n.lower())
+                        if hit:
+                            return hit
+                    return None
+
+                col_local_id = _pick("local_id", "localid")
+                col_type = _pick("local_type", "type")
+                col_create = _pick("create_time", "createtime")
+                col_sender_flag = _pick("is_sender", "issender")
+                col_real_sender = _pick("real_sender_id", "realsenderid", "sender_id")
+                col_content = _pick("message_content", "strcontent", "content")
+                col_compress = _pick("compress_content", "compresscontent")
+                col_sort = _pick("sort_seq", "sortseq")
+
+                if not (col_local_id and col_type and col_create and col_content):
+                    return []
+
+                # Resolve self rowid for sender inference if possible
+                self_rowid: Optional[int] = None
+                if col_real_sender and not col_sender_flag:
+                    name2id_table = self._find_table(
+                        conn, ["Name2Id", "Name2ID", "name2id"]
+                    )
+                    if name2id_table:
+                        ncols = conn.execute(
+                            f"PRAGMA table_info({name2id_table})"
+                        ).fetchall()
+                        nmap = {str(r[1]).lower(): str(r[1]) for r in ncols}
+                        n_user = (
+                            nmap.get("user_name")
+                            or nmap.get("usrname")
+                            or nmap.get("username")
+                            or nmap.get("user")
+                        )
+                        if n_user:
+                            self_user = self._guess_self_username_v4()
+                            row = conn.execute(
+                                f"SELECT rowid FROM {name2id_table} WHERE {n_user} = ? LIMIT 1",
+                                (self_user,),
+                            ).fetchone()
+                            if row is not None:
+                                try:
+                                    self_rowid = int(row[0])
+                                except Exception:
+                                    self_rowid = None
+
+                order_col = col_sort or col_create
+                select_cols = [
+                    col_local_id,
+                    col_type,
+                    col_create,
+                    col_sender_flag or "NULL",
+                    col_real_sender or "NULL",
+                    col_content,
+                    col_compress or "NULL",
+                ]
+                sql = (
+                    f"SELECT {', '.join(select_cols)} FROM {v4_table} "
+                    f"ORDER BY {order_col} DESC LIMIT ?"
+                )
+
+                cursor = conn.execute(sql, (int(limit),))
+                messages: List[Message] = []
+                for row in cursor.fetchall():
+                    local_id = row[0]
+                    msg_type = int(row[1] or 0)
+                    create_time = self._normalize_epoch_seconds(row[2])
+                    sender_flag = row[3]
+                    real_sender_id = row[4]
+                    content = self._to_text(row[5])
+                    if not content:
+                        content = self._to_text(row[6])
+
+                    is_sender = False
+                    if sender_flag is not None:
+                        is_sender = bool(int(sender_flag))
+                    elif self_rowid is not None and real_sender_id is not None:
+                        try:
+                            is_sender = int(real_sender_id) == int(self_rowid)
+                        except Exception:
+                            is_sender = False
+
+                    messages.append(
+                        Message(
+                            id=local_id,
+                            contact_id=contact_id,
+                            content=content,
+                            create_time=create_time,
+                            is_sender=is_sender,
+                            msg_type=msg_type,
+                        )
+                    )
+
+                return messages
+
             msg_table = self._find_table(conn, ["MSG", "msg"])
             if not msg_table:
                 return []
@@ -315,7 +553,7 @@ class WeChatDBHandler:
             col_talkerid = col_map.get("talkerid")
             col_talker = col_map.get("talker")
 
-            params = []
+            params: list[int | str] = []
             where_clause = ""
             if col_talkerid:
                 name2id_table = self._find_table(

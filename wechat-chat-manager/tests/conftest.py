@@ -10,6 +10,25 @@ from pathlib import Path
 
 import pytest
 
+
+@pytest.fixture(scope="session", autouse=True)
+def _isolate_app_config():
+    """Isolate on-disk config from developer machine.
+
+    Tests should not read/write user home config.json.
+    """
+
+    tmp_cfg_dir = Path(tempfile.mkdtemp())
+    os.environ["WECHAT_MANAGER_CONFIG_DIR"] = str(tmp_cfg_dir)
+    try:
+        yield
+    finally:
+        try:
+            shutil.rmtree(tmp_cfg_dir, ignore_errors=True)
+        finally:
+            os.environ.pop("WECHAT_MANAGER_CONFIG_DIR", None)
+
+
 # 添加项目根目录到 Python 路径
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))

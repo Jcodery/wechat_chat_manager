@@ -13,6 +13,7 @@ from typing import Optional, List
 
 from wechat_manager.core import wechat_dir, key_extractor
 from wechat_manager.core.db_handler import WeChatDBHandler
+from wechat_manager.core.decrypt import DecryptionError, InvalidKeyError
 from wechat_manager.core.storage import EncryptedStorage
 from wechat_manager.api.routes.dependencies import get_db_handler, get_storage
 
@@ -73,6 +74,8 @@ async def list_contacts(db_handler: WeChatDBHandler = Depends(get_db_handler)):
             ],
             "count": len(contacts),
         }
+    except (InvalidKeyError, DecryptionError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=f"Failed to get contacts: {str(e)}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get contacts: {str(e)}")
 
@@ -93,6 +96,10 @@ async def list_chatrooms(db_handler: WeChatDBHandler = Depends(get_db_handler)):
             ],
             "count": len(chatrooms),
         }
+    except (InvalidKeyError, DecryptionError, ValueError) as e:
+        raise HTTPException(
+            status_code=400, detail=f"Failed to get chatrooms: {str(e)}"
+        )
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to get chatrooms: {str(e)}"

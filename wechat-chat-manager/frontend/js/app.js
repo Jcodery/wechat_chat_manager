@@ -176,13 +176,16 @@ document.addEventListener('alpine:init', () => {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ wxid })
                 });
-                if (!res.ok) throw new Error('Failed to set active account');
+                if (!res.ok) {
+                    const msg = await this.readApiError(res, '切换账号失败');
+                    throw new Error(msg);
+                }
                 
                 await this.refreshWeChatConfig(false);
                 await this.loadContacts();
                 this.showNotification('已切换账号', 'success');
             } catch (e) {
-                this.showNotification('切换账号失败', 'error');
+                this.showNotification(e.message || '切换账号失败', 'error');
             }
         },
 
@@ -198,7 +201,10 @@ document.addEventListener('alpine:init', () => {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ key: this.manualKey })
                 });
-                if (!res.ok) throw new Error('Failed to save key');
+                if (!res.ok) {
+                    const msg = await this.readApiError(res, '保存密钥失败');
+                    throw new Error(msg);
+                }
                 
                 this.manualKey = '';
                 await this.refreshWeChatConfig(false);
@@ -208,7 +214,7 @@ document.addEventListener('alpine:init', () => {
                     await this.loadContacts();
                 }
             } catch (e) {
-                this.showNotification('保存密钥失败', 'error');
+                this.showNotification(e.message || '保存密钥失败', 'error');
             } finally {
                 this.loading = false;
             }
@@ -450,13 +456,16 @@ document.addEventListener('alpine:init', () => {
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({contact_ids: [...this.selectedIds]})
                 });
-                if (!res.ok) throw new Error('提取失败');
+                if (!res.ok) {
+                    const msg = await this.readApiError(res, '提取失败');
+                    throw new Error(msg);
+                }
                 const data = await res.json();
-                this.showNotification(`成功提取 ${data.total_messages || ''} 条消息`, 'success');
+                this.showNotification(`成功提取 ${data.total_extracted || 0} 条消息`, 'success');
                 await this.loadContacts(); // Refresh to show updated status if needed
             } catch (e) {
                 this.error = '提取失败: ' + e.message;
-                this.showNotification(e.message, 'error');
+                this.showNotification(e.message || '提取失败', 'error');
             } finally {
                 this.loading = false;
             }
@@ -468,7 +477,7 @@ document.addEventListener('alpine:init', () => {
             try {
                 const preflightRes = await fetch(`${this.apiBase}/mode-b/preflight`);
                 const preflight = await preflightRes.json();
-                if (!preflight.passed) {
+                if (!preflight.all_passed) {
                     const failedChecks = Object.entries(preflight.checks)
                         .filter(([k,v]) => !v).map(([k]) => k).join(', ');
                     this.showNotification('预检查失败: ' + failedChecks, 'error');
@@ -497,16 +506,24 @@ document.addEventListener('alpine:init', () => {
             }
             this.loading = true;
             try {
-                const res = await fetch(`${this.apiBase}/mode-b/restore`, {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({contact_ids: [...this.selectedIds]})
-                });
-                if (!res.ok) throw new Error('还原失败');
-                this.showNotification('聊天记录还原成功', 'success');
+                let restoredTotal = 0;
+                for (const id of this.selectedIds) {
+                    const res = await fetch(`${this.apiBase}/mode-b/restore`, {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({contact_id: id})
+                    });
+                    if (!res.ok) {
+                        const msg = await this.readApiError(res, '还原失败');
+                        throw new Error(msg);
+                    }
+                    const data = await res.json().catch(() => ({}));
+                    restoredTotal += Number(data.restored || 0);
+                }
+                this.showNotification(`聊天记录还原成功（共 ${restoredTotal} 条）`, 'success');
                 await this.loadContacts();
             } catch (e) {
-                this.showNotification('还原失败: ' + e.message, 'error');
+                this.showNotification('还原失败: ' + (e.message || ''), 'error');
             } finally {
                 this.loading = false;
             }
@@ -536,7 +553,7 @@ document.addEventListener('alpine:init', () => {
             }
             try {
                 for (const id of this.selectedIds) {
-                    window.open(`${this.apiBase}/export/${id}?format=txt`, '_blank');
+                    window.open(`${this.apiBase}/export/${id}/download?format=txt`, '_blank');
                 }
                 this.showNotification('导出请求已发送', 'success');
             } catch (e) {
@@ -545,6 +562,15 @@ document.addEventListener('alpine:init', () => {
         },
         
         // UI Helpers
+        async readApiError(res, fallbackMessage) {
+            try {
+                const data = await res.json();
+                return data?.detail || data?.message || fallbackMessage;
+            } catch (e) {
+                return fallbackMessage;
+            }
+        },
+
         showNotification(message, type = 'info') {
             this.toastMessage = message;
             this.toastType = type;
