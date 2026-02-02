@@ -6,9 +6,36 @@ nul
 
 # Python virtualenvs
 .venv/
+venv/
+ENV/
+env/
 
 # Scratch / vendor
 .tmp/
 
 # Local session notes
 session-ses_*.md
+
+# Project specific
+.wechat_manager/
+data/
+backups/
+exports/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Logs
+*.log

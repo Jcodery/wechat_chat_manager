@@ -2,15 +2,11 @@
 fastapi>=0.104.0
 uvicorn>=0.24.0
 
-
 # Cryptography
 pycryptodome>=3.19.0
 
-# Optional message decompression (Weixin 4.x)
+# Message decompression (Weixin 4.x)
 zstandard>=0.22.0
-
-# Note: SQLCipher decryption handled by pycryptodome
-# sqlcipher3-binary not available on Windows
 
 # Secure credential storage
 keyring>=24.0.0
