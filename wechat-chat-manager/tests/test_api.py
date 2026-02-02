@@ -282,7 +282,6 @@ class TestProjectStructure:
             "wechat.py",
             "contacts.py",
             "mode_a.py",
-            "mode_b.py",
             "search.py",
             "export.py",
             "dependencies.py",
@@ -321,7 +320,6 @@ class TestAPIIntegration:
                 wechat,
                 contacts,
                 mode_a,
-                mode_b,
                 search,
                 export,
             )
@@ -330,7 +328,6 @@ class TestAPIIntegration:
             assert wechat.router is not None
             assert contacts.router is not None
             assert mode_a.router is not None
-            assert mode_b.router is not None
             assert search.router is not None
             assert export.router is not None
         except ImportError as e:

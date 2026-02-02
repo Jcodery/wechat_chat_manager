@@ -4,8 +4,7 @@ WeChat directory and key management routes.
 Provides endpoints for:
 - Auto-detect WeChat directory
 - Manually set WeChat directory
-- Check WeChat running status
-- Key extraction and management
+- Key management (manual only)
 """
 
 from pathlib import Path
@@ -58,12 +57,6 @@ class AccountListResponse(BaseModel):
 
 class SetActiveAccountRequest(BaseModel):
     wxid: str
-
-
-class WeChatStatusResponse(BaseModel):
-    """Response model for WeChat status"""
-
-    running: bool
 
 
 class KeyStatusResponse(BaseModel):
@@ -226,74 +219,11 @@ async def set_active_account(req: SetActiveAccountRequest):
     return {"success": True, "message": f"Active account set to {req.wxid}"}
 
 
-@router.get("/status", response_model=WeChatStatusResponse)
-async def wechat_status():
-    """Check if WeChat is running"""
-    return {"running": key_extractor.is_wechat_running()}
-
-
 @router.get("/key/status", response_model=KeyStatusResponse)
 async def key_status():
     """Check if key is saved in keyring"""
     key = key_extractor.get_key_from_keyring()
     return {"is_saved": key is not None}
-
-
-@router.post("/key/extract", response_model=KeyResponse)
-async def extract_key():
-    """Extract key from WeChat process memory"""
-    try:
-        # Prefer validating against the active account DB if configured.
-        cfg = load_config()
-        root = wechat_dir.get_current_wechat_dir() or cfg.root_path
-        wxid_path: Optional[Path] = None
-        if root:
-            wxid_folders = wechat_dir.get_wxid_folders(root)
-            if cfg.active_wxid:
-                for p in wxid_folders:
-                    if Path(p).name == cfg.active_wxid:
-                        wxid_path = Path(p)
-                        break
-            elif len(wxid_folders) == 1:
-                wxid_path = Path(wxid_folders[0])
-
-        db_path = None
-        if wxid_path is not None:
-            # V4: db_storage/contact/contact.db, V3: Msg/MicroMsg.db
-            v4_contact = wxid_path / "db_storage" / "contact" / "contact.db"
-            v3_micromsg = wxid_path / "Msg" / "MicroMsg.db"
-            if v4_contact.exists() and v4_contact.stat().st_size > 0:
-                db_path = str(v4_contact)
-            elif v3_micromsg.exists() and v3_micromsg.stat().st_size > 0:
-                db_path = str(v3_micromsg)
-
-        if not db_path:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "WeChat directory/account not configured for validation. "
-                    "Please set directory and select an account first."
-                ),
-            )
-
-        key = key_extractor.extract_key_from_memory(db_path=db_path)
-
-        if key:
-            # Save to keyring
-            key_extractor.save_key_to_keyring(key)
-            return {
-                "success": True,
-                "message": "Key extracted and saved successfully",
-            }
-        else:
-            return {
-                "success": False,
-                "message": "Could not extract key from memory",
-            }
-    except key_extractor.WeChatNotRunningError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except key_extractor.KeyExtractionError as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/key/manual", response_model=KeyResponse)

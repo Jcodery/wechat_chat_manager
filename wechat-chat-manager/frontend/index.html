@@ -329,9 +329,8 @@
                     <div class="flex items-center justify-between p-3 rounded-lg border mb-3" :class="hasKey ? 'bg-green-50 border-green-100' : 'bg-yellow-50 border-yellow-100'">
                         <div class="flex items-center">
                             <div class="w-2 h-2 rounded-full mr-2" :class="hasKey ? 'bg-green-500' : 'bg-yellow-500'"></div>
-                            <span class="text-sm font-medium" :class="hasKey ? 'text-green-800' : 'text-yellow-800'" x-text="hasKey ? '已获取密钥' : '未获取密钥'"></span>
+                            <span class="text-sm font-medium" :class="hasKey ? 'text-green-800' : 'text-yellow-800'" x-text="hasKey ? '已设置密钥' : '未设置密钥'"></span>
                         </div>
-                        <button @click="extractKey()" class="text-xs underline" :class="hasKey ? 'text-green-700 hover:text-green-800' : 'text-yellow-700 hover:text-yellow-800'" x-text="hasKey ? '重新获取' : '自动获取'"></button>
                     </div>
                     
                     <!-- Manual Key Input -->
@@ -341,7 +340,7 @@
                             保存密钥
                         </button>
                     </div>
-                    <p class="text-xs text-gray-500 mt-1">如果自动获取失败，可使用工具提取密钥后在此手动填入</p>
+                    <p class="text-xs text-gray-500 mt-1">请使用工具提取密钥后在此手动输入</p>
                 </div>
 
                 <!-- App Settings -->

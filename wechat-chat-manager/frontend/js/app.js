@@ -289,28 +289,6 @@ document.addEventListener('alpine:init', () => {
             }
         },
 
-        async extractKey() {
-            this.loading = true;
-            try {
-                const res = await fetch(`${this.apiBase}/wechat/key/extract`, { method: 'POST' });
-                const data = await res.json().catch(() => ({}));
-                if (!res.ok) {
-                    throw new Error(data.detail || data.message || '获取密钥失败');
-                }
-
-                this.hasKey = true;
-                this.showNotification('密钥已获取', 'success');
-
-                if (this.wechatDir) {
-                    await this.loadContacts();
-                }
-            } catch (e) {
-                this.showNotification(e.message || '获取密钥失败', 'error');
-            } finally {
-                this.loading = false;
-            }
-        },
-
         async saveSettings() {
             // Only persist WeChat dir for now
             if ((this.wechatDir || '').trim()) {
@@ -319,16 +297,6 @@ document.addEventListener('alpine:init', () => {
                 return;
             }
             this.showSettings = false;
-        },
-        
-        async checkWeChatStatus() {
-            try {
-                const res = await fetch(`${this.apiBase}/wechat/status`);
-                const data = await res.json();
-                return data.running;
-            } catch (e) {
-                return false;
-            }
         },
         
         // Contact methods
@@ -342,7 +310,7 @@ document.addEventListener('alpine:init', () => {
             if (!this.hasKey) {
                 this.contacts = [];
                 this.chatrooms = [];
-                this.showNotification('请先获取解密密钥（设置 → 重新获取）', 'warning');
+                this.showNotification('请先手动输入解密密钥（设置 → 手动输入）', 'warning');
                 return;
             }
             if (this.accounts.length > 1 && !this.activeAccount) {
@@ -429,7 +397,7 @@ document.addEventListener('alpine:init', () => {
             }
         },
         
-        async loadMessages(contactId) {
+        async loadMessages(contactId, startPolling = true) {
             const contact = this.allContacts.find(c => c.id === contactId);
             if (!contact) return;
             
@@ -442,7 +410,7 @@ document.addEventListener('alpine:init', () => {
                 const data = await res.json();
                 const list = (data && data.messages) ? data.messages : [];
                 this.messages = list.map(m => this.formatMessage(m, contact));
-                this.startMessagePolling(contactId);
+                if (startPolling) this.startMessagePolling(contactId);
             } catch (e) {
                 this.error = '加载消息失败';
                 this.showNotification('加载消息失败', 'error');
@@ -472,7 +440,7 @@ document.addEventListener('alpine:init', () => {
                 this.showNotification(`成功提取 ${data.total_extracted || 0} 条消息`, 'success');
                 await this.loadContacts();
                 if (this.selectedIds.length === 1) {
-                    await this.loadMessages(this.selectedIds[0]);
+                    await this.loadMessages(this.selectedIds[0], true);
                 }
             } catch (e) {
                 this.error = '提取失败: ' + e.message;
@@ -619,10 +587,8 @@ document.addEventListener('alpine:init', () => {
                     this.messageSyncing = false;
                     return;
                 }
-                const data = await res.json();
-                if (data && data.new_messages > 0) {
-                    await this.loadMessages(contactId);
-                }
+                await res.json().catch(() => ({}));
+                await this.loadMessages(contactId, false);
             } catch (e) {
                 // silent sync failures
             } finally {

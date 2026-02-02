@@ -4,7 +4,7 @@ Shared dependencies for API routes.
 Provides FastAPI dependency injection for:
 - WeChatDBHandler
 - EncryptedStorage
-- ModeA/ModeB instances
+- ModeA instances
 """
 
 from pathlib import Path
@@ -47,7 +47,7 @@ def get_db_handler() -> WeChatDBHandler:
     if not key:
         raise HTTPException(
             status_code=400,
-            detail="Database key not available. Please use /api/wechat/key/extract or /api/wechat/key/manual first.",
+            detail="Database key not available. Please use /api/wechat/key/manual first.",
         )
 
     wxid_folders = wechat_dir.get_wxid_folders(root_dir)

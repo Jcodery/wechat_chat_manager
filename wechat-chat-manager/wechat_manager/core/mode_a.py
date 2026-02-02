@@ -139,8 +139,9 @@ class ModeA:
                 }
 
             last_time = self.storage.get_latest_message_time(contact_id)
+            since_time = max(int(last_time) - 120, 0)
             messages = self.db_handler.get_messages(
-                contact_id, limit=10000, since_time=last_time
+                contact_id, limit=10000, since_time=since_time
             )
 
             for msg in messages:
